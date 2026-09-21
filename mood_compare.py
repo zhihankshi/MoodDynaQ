@@ -11,8 +11,17 @@ def run(agent, lower_len, n_ep):
     return log
 
 def summarize(log, phase, target):
+    """Episodes to convergence, counted from the START OF THE PHASE.
+
+    episodes_to_greedy_convergence returns an absolute episode index, so phase2
+    must have the offset removed -- otherwise "converged 4 episodes after the
+    switch" prints as 404 and reads like "never". lam_sweep.py and plots.py
+    already do this; keep the convention identical everywhere.
+    """
     rows = [r for r in log if r["phase"] == phase]
     conv = episodes_to_greedy_convergence(log, phase, target)
+    if conv is not None:
+        conv -= rows[0]["episode"]
     frac = sum(1 for r in rows if r["greedy_route"] == target) / len(rows)
     return conv, frac
 

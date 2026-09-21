@@ -1,5 +1,5 @@
 """
-Dyna-Q Agent
+Tabular Dyna-Q.
 
 Three components, per Sutton & Barto:
   1. Direct RL   -- Q-learning update from the real transition

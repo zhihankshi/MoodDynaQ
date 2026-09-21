@@ -110,8 +110,19 @@ def show_backward_propagation(planning_steps=0, alpha=0.1, n_episodes=12, seed=0
     agent.Q[("start", "down")] = 0.01  # force it down the lower corridor
     env = Maze(Config.phase1())
 
-    chain = [("d4", "down"), ("d3", "down"), ("d2", "down"),
-             ("d1", "down"), ("start", "down")]
+    # Build the lower-corridor chain from the env spec, goal-end first, so this
+    # never silently references states that don't exist.
+    trans = env.spec["transitions"]
+    chain, s = [], "start"
+    path = []
+    a = "down"
+    while s not in env.spec["terminals"]:
+        path.append((s, a))
+        s = trans[(s, a)][0]
+        a = "right"
+    chain = list(reversed(path))
+    missing = [p for p in chain if p not in trans]
+    assert not missing, f"trace references nonexistent pairs: {missing}"
     print(f"\nplanning_steps={planning_steps}: value propagating backward "
           f"from the goal (alpha={alpha})")
     print(f"{'ep':>3} " + " ".join(f"{s:>8}" for s, _ in chain))
@@ -125,8 +136,8 @@ def show_backward_propagation(planning_steps=0, alpha=0.1, n_episodes=12, seed=0
             if done:
                 break
         print(f"{ep:>3} " + " ".join(f"{agent.q(s,a):>8.3f}" for s, a in chain))
-    print("     exact: " + " ".join(f"{v:>8.2f}" for v in
-                                    [-2.5, -5.0, -7.5, -10.0, -12.5]))
+    Q_star, _ = optimal_q(env.config)
+    print("  exact: " + " ".join(f"{Q_star[p]:>8.2f}" for p in chain))
 
 
 if __name__ == "__main__":
@@ -168,9 +179,9 @@ QUESTIONS TO WORK THROUGH
 6. Why does the bootstrap term use max_a' Q(s',a') rather than the Q-value of
    the action actually taken next? What would change if it used the latter?
 
-7. Q(u1,right) should converge to -15: that is -2.5 (the step) -10 (the trap)
-   -2.5 (the remaining step to the goal). With epsilon=0 the agent never takes
-   the upper corridor at all. So how does Q(u1,right) ever get updated?
+7. Q(start,right) should converge to -15: that is two -2.5 steps plus the -10
+   trap on the upper corridor. With epsilon=0 the agent never takes the upper
+   corridor at all. So how does Q(start,right) ever get updated?
    (Check the SUMMARY table -- is it still 0?)
 
 8. In the SUMMARY, which pairs have converged and which have not? What do the

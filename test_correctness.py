@@ -24,22 +24,38 @@ def check(label, condition, detail=""):
 def test_hand_computed_values():
     """The analytic values must match the numbers derived by hand."""
     print("\ntest: analytic values match hand calculation")
+    # Default geometry: upper=2 steps, lower=4 steps, c=2.5, T=10.
+    # Hand calculation:
+    #   upper = -2*2.5 - 10          = -15
+    #   lower (P1) = -4*2.5 - 0      = -10
+    #   lower (P2) = -4*2.5 - 10     = -20
+    # These are HARDCODED on purpose: this test is an independent check on
+    # optimal.py, so it must not derive its expected values from the same code.
+    # If you change the default geometry, redo the arithmetic by hand.
     Q1, _ = optimal_q(Config.phase1())
     Q2, _ = optimal_q(Config.phase2())
     ok = True
-    ok &= check("phase1 Q*(start,right) = -17.5",
-                abs(Q1[("start", "right")] + 17.5) < TOL,
+    ok &= check("phase1 Q*(start,right) = -15",
+                abs(Q1[("start", "right")] + 15.0) < TOL,
                 f"got {Q1[('start','right')]}")
-    ok &= check("phase1 Q*(start,down)  = -12.5",
-                abs(Q1[("start", "down")] + 12.5) < TOL,
+    ok &= check("phase1 Q*(start,down)  = -10",
+                abs(Q1[("start", "down")] + 10.0) < TOL,
                 f"got {Q1[('start','down')]}")
-    ok &= check("phase2 Q*(start,down)  = -22.5",
-                abs(Q2[("start", "down")] + 22.5) < TOL,
+    ok &= check("phase2 Q*(start,down)  = -20",
+                abs(Q2[("start", "down")] + 20.0) < TOL,
                 f"got {Q2[('start','down')]}")
     ok &= check("phase1 optimal is lower, margin 5",
                 optimal_route(Config.phase1()) == ("lower", 5.0))
     ok &= check("phase2 optimal is upper, margin 5",
                 optimal_route(Config.phase2()) == ("upper", 5.0))
+
+    # Margin formula holds for every geometry, not just the default.
+    for lower in [3, 4, 6, 8]:
+        for ph in [1, 2]:
+            cfg = Config.matched(lower_len=lower, phase=ph)
+            _, m = optimal_route(cfg)
+            ok &= check(f"matched geometry lower_len={lower} phase{ph}: margin 5",
+                        abs(m - 5.0) < TOL, f"got {m}")
     return ok
 
 
