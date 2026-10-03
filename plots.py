@@ -22,6 +22,7 @@ import numpy as np
 from env import Maze, Config, make_maze_spec
 from agent import DynaQ
 from mood import MoodyDynaQ, flip_threshold
+from optimal import optimal_q, optimal_route
 from train import run_phase, episodes_to_greedy_convergence
 
 BASE_C, MOOD_C = "#2b6cb0", "#c53030"
@@ -110,6 +111,11 @@ def mean_sem(arr):
     m = arr.mean(axis=0)
     sem = arr.std(axis=0, ddof=1) / np.sqrt(arr.shape[0]) if arr.shape[0] > 1 else 0 * m
     return m, sem
+
+
+def blended(ax):
+    """x in data coords, y in axes coords."""
+    return ax.get_xaxis_transform()
 
 
 def param_note(ax, loc="lower right", **kw):
@@ -272,12 +278,22 @@ PLAN_ARMS = [
 def fig_planning_sweep(eta=0.1, lam=0.7, lower_len=4, n_ep=400,
                        plans=(0, 1, 2, 5, 10, 20), seeds=range(30)):
     """
-    Fig 4: episodes to convergence vs planning_steps, three arms.
+    Fig 4: does planning dilute the mood effect?
 
-    With mood_biases="real" and planning_steps=n, only 1/(1+n) of all Q-updates
-    carry the mood term, so mood should dilute toward baseline as n grows.
-    The "real+planning" arm removes that dilution and is the test of whether
-    the mood effect survives planning at all.
+    Two rows, because the question is about the GAP between arms, not about
+    either arm on its own:
+      top    -- episodes to convergence per arm, linear y
+      bottom -- paired mood advantage (baseline minus mood, same seed)
+
+    Y-SCALE: linear, deliberately. An earlier version used symlog(linthresh=1).
+    That magnified n>=2, where both agents converge in under one episode and
+    the metric is at its floor, and compressed n=0, where the real 18.6-episode
+    effect lives. Log scale shows ratios; near a floor of ~0.6 episodes a ratio
+    is noise. The floor region is shaded instead of being drawn as signal.
+
+    PAIRING: seeds are paired (CLAUDE.md §7), so the advantage is computed
+    per seed and then averaged. The paired SEM is much tighter than the
+    independent-sample SEM the previous version showed.
     """
     res = {ph: {name: {n: [] for n in plans} for name, *_ in PLAN_ARMS}
            for ph in (1, 2)}
@@ -291,28 +307,203 @@ def fig_planning_sweep(eta=0.1, lam=0.7, lower_len=4, n_ep=400,
                     res[ph][name][n].append(
                         conv_in_phase(log, f"phase{ph}", tgt, n_ep))
 
-    fig, axes = plt.subplots(1, 2, figsize=(9.5, 3.8))
+    n_seeds = len(list(seeds))
+    fig, axes = plt.subplots(2, 2, figsize=(9.5, 6.6), sharex="col")
     xs = np.arange(len(plans))
-    for ax, ph, label in [(axes[0], 1, "Phase 1: acquisition"),
-                          (axes[1], 2, "Phase 2: adaptation")]:
+
+    for col, (ph, label) in enumerate([(1, "Phase 1: acquisition"),
+                                       (2, "Phase 2: adaptation")]):
+        top, bot = axes[0, col], axes[1, col]
+
+        # where the metric bottoms out: baseline already converges in <1 episode,
+        # so neither arm can show anything and the numbers are not comparable
+        base_mean = np.array([np.mean(res[ph]["baseline"][n]) for n in plans])
+        floor = np.flatnonzero(base_mean < 1.0)
+        for ax in (top, bot):
+            if floor.size:
+                ax.axvspan(floor[0] - 0.5, len(plans) - 0.5, color="#edf2f7",
+                           lw=0, zorder=0)
+
         for name, color, ls, _kw in PLAN_ARMS:
-            means = [np.mean(res[ph][name][n]) for n in plans]
-            sems = [np.std(res[ph][name][n], ddof=1) / np.sqrt(len(list(seeds)))
-                    for n in plans]
-            ax.errorbar(xs, means, yerr=sems, color=color, ls=ls, marker="o",
-                        ms=4, lw=2, capsize=3, label=name)
-        ax.set_yscale("symlog", linthresh=1)
-        ax.set_xticks(xs)
-        ax.set_xticklabels([str(n) for n in plans])
-        ax.set_xlabel("Planning steps per real step")
-        ax.set_ylabel("Episodes to greedy convergence")
-        ax.set_title(label)
-        ax.spines[["top", "right"]].set_visible(False)
-    axes[0].legend(frameon=False, fontsize=7.5, loc="upper right")
-    param_note(axes[1], loc="lower left", eta=eta, lam=lam,
-               lower_len=lower_len, seeds=len(list(seeds)))
-    fig.suptitle("Does planning dilute the mood effect? (mean \u00b1 SEM, symlog y)",
-                 y=1.02)
+            arr = {n: np.array(res[ph][name][n], dtype=float) for n in plans}
+            m = [arr[n].mean() for n in plans]
+            e = [arr[n].std(ddof=1) / np.sqrt(n_seeds) for n in plans]
+            top.errorbar(xs, m, yerr=e, color=color, ls=ls, marker="o", ms=4,
+                         lw=2, capsize=3, label=name, zorder=3)
+            if name == "baseline":
+                continue
+            d = np.array([np.array(res[ph]["baseline"][n], dtype=float)
+                          - arr[n] for n in plans])          # (len(plans), seeds)
+            dm = d.mean(axis=1)
+            de = d.std(axis=1, ddof=1) / np.sqrt(n_seeds)
+            bot.errorbar(xs, dm, yerr=de, color=color, ls=ls, marker="o", ms=4,
+                         lw=2, capsize=3, label=name, zorder=3)
+
+        # The n=0 advantage is ~10x the rest, so the tail -- which is where
+        # "dilutes but does not abolish" actually has to be read -- needs its
+        # own axes. Phase 1 has no non-floor tail, so it gets no inset.
+        if ph == 2:
+            ins = bot.inset_axes([0.45, 0.40, 0.52, 0.50])
+            for name, color, ls, _kw in PLAN_ARMS:
+                if name == "baseline":
+                    continue
+                arr = {n: np.array(res[ph][name][n], dtype=float) for n in plans}
+                d = np.array([np.array(res[ph]["baseline"][n], dtype=float)
+                              - arr[n] for n in plans])
+                ins.errorbar(xs[1:], d.mean(axis=1)[1:],
+                             yerr=(d.std(axis=1, ddof=1) / np.sqrt(n_seeds))[1:],
+                             color=color, ls=ls, marker="o", ms=3, lw=1.5,
+                             capsize=2)
+            ins.axhline(0, color=BASE_C, lw=1)
+            ins.set_xticks(xs[1:])
+            ins.set_xticklabels([str(n) for n in plans[1:]], fontsize=7)
+            ins.tick_params(labelsize=7)
+            ins.set_title("zoom: n\u22651", fontsize=7.5, color="#4a5568", pad=2)
+            ins.spines[["top", "right"]].set_visible(False)
+
+        bot.axhline(0, color=BASE_C, lw=1.5, zorder=2)
+        bot.text(len(plans) - 0.55, 0, " baseline", color=BASE_C, fontsize=7.5,
+                 va="bottom", ha="right")
+        if floor.size:
+            # centred in the shaded band, mid-height: the legend owns the top
+            # corner and the curves sit near zero down below.
+            top.text((floor[0] - 0.5 + len(plans) - 0.5) / 2, 0.45,
+                     "metric floor\nbaseline <1 episode,\nnothing to measure",
+                     transform=blended(top), ha="center", va="center",
+                     fontsize=7.5, color="#718096")
+
+        top.set_title(label)
+        top.set_ylabel("Episodes to greedy convergence")
+        bot.set_ylabel("Mood advantage (episodes saved)")
+        bot.set_xlabel("Planning steps per real step")
+        bot.set_xticks(xs)
+        bot.set_xticklabels([str(n) for n in plans])
+        for ax in (top, bot):
+            ax.set_ylim(bottom=min(0, ax.get_ylim()[0]))
+            ax.spines[["top", "right"]].set_visible(False)
+
+    axes[0, 0].legend(frameon=False, fontsize=7.5, loc="upper right")
+    # Phase 1 bottom-right is empty (the floor sits at zero); Phase 2 bottom
+    # holds the zoom inset, so the note cannot go there.
+    param_note(axes[1, 0], loc="upper right", eta=eta, lam=lam,
+               lower_len=lower_len, seeds=n_seeds)
+    fig.suptitle("Does planning dilute the mood effect?  "
+                 "(top: mean \u00b1 SEM;  bottom: paired difference \u00b1 SEM)",
+                 y=0.98)
+    fig.tight_layout()
+    return fig
+
+
+def fig_planning_sweep_2arm(eta=0.1, lam=0.7, lower_len=4, n_ep=400,
+                            plans=(0, 1, 2, 5, 10, 20), seeds=range(30),
+                            boot=2000):
+    """
+    Fig 4b: baseline vs mood (bias "real") only -- the theory-faithful pair.
+
+    Fig 4's third arm ("real+planning") answered its question and now only
+    overplots. Dropping it leaves room for the comparison fig 4 cannot make:
+    the advantage RELATIVE to baseline. The absolute advantage collapses from
+    14.0 to 1.6 episodes between n=0 and n=1 mostly because baseline itself
+    collapses from 27.2 to 10.1 -- there is simply less left to save. The
+    relative panel separates "the effect went away" from "the room went away".
+
+    Percentage error bars are a paired bootstrap over seeds (the ratio of means
+    is not a per-seed quantity: individual seeds hit baseline=0 at high n).
+    """
+    rng = np.random.default_rng(0)
+    arms = [("baseline", BASE_C, "-", dict(kind="baseline")),
+            ("mood (bias real)", MOOD_C, "-", dict(kind="mood", mood_biases="real"))]
+    res = {ph: {name: {} for name, *_ in arms} for ph in (1, 2)}
+    for name, _c, _ls, kw in arms:
+        kw = dict(kw)
+        kind = kw.pop("kind")
+        for n in plans:
+            acc = {1: [], 2: []}
+            for seed in seeds:
+                log, _ = run_one(kind, seed, eta, lam, n, lower_len, n_ep, **kw)
+                for ph, tgt in [(1, "lower"), (2, "upper")]:
+                    acc[ph].append(conv_in_phase(log, f"phase{ph}", tgt, n_ep))
+            for ph in (1, 2):
+                res[ph][name][n] = np.array(acc[ph], dtype=float)
+
+    n_seeds = len(list(seeds))
+    fig, axes = plt.subplots(2, 2, figsize=(9.5, 6.6), sharex="col")
+    xs = np.arange(len(plans))
+
+    for col, (ph, label) in enumerate([(1, "Phase 1: acquisition"),
+                                       (2, "Phase 2: adaptation")]):
+        top, bot = axes[0, col], axes[1, col]
+        base = res[ph]["baseline"]
+        mood = res[ph]["mood (bias real)"]
+        # One criterion for both rows: once baseline converges in ~1 episode,
+        # a metric that needs 20 sustained episodes cannot resolve anything,
+        # and a ratio with that denominator is unstable. CLAUDE.md §8 says the
+        # same in words ("Phase 1 is uninformative past n=1").
+        floor = np.flatnonzero(np.array([base[n].mean() for n in plans]) < 2.0)
+        for ax in (top, bot):
+            if floor.size:
+                ax.axvspan(floor[0] - 0.5, len(plans) - 0.5, color="#edf2f7",
+                           lw=0, zorder=0)
+
+        for name, color, ls, _kw in arms:
+            m = [res[ph][name][n].mean() for n in plans]
+            e = [res[ph][name][n].std(ddof=1) / np.sqrt(n_seeds) for n in plans]
+            top.errorbar(xs, m, yerr=e, color=color, ls=ls, marker="o", ms=4,
+                         lw=2, capsize=3, label=name, zorder=3)
+
+        pct, lo, hi, wins = [], [], [], []
+        for n in plans:
+            b, m = base[n], mood[n]
+            pct.append(100 * (b.mean() - m.mean()) / b.mean())
+            idx = rng.integers(0, n_seeds, size=(boot, n_seeds))
+            bs = 100 * (b[idx].mean(axis=1) - m[idx].mean(axis=1)) / b[idx].mean(axis=1)
+            lo.append(np.percentile(bs, 2.5))
+            hi.append(np.percentile(bs, 97.5))
+            wins.append(int((b - m > 0).sum()))
+        pct = np.array(pct)
+        bot.errorbar(xs, pct, yerr=[pct - np.array(lo), np.array(hi) - pct],
+                     color=MOOD_C, marker="o", ms=4, lw=2, capsize=3, zorder=3)
+        bot.axhline(0, color=BASE_C, lw=1.5, zorder=2)
+        # left edge: the right-hand end is where the n=20 point sits at 0%
+        bot.text(-0.55, 0, "baseline ", color=BASE_C, fontsize=7.5,
+                 va="bottom", ha="left")
+        # seeds on which mood won, so a percentage near a small baseline cannot
+        # be mistaken for a solid effect
+        for x, w in zip(xs, wins):
+            bot.text(x, 0.97, f"{w}/{n_seeds}", transform=blended(bot),
+                     ha="center", va="top", fontsize=6.5, color="#718096")
+
+        if floor.size:
+            top.text((floor[0] - 0.5 + len(plans) - 0.5) / 2, 0.45,
+                     "baseline \u22642 episodes\nmetric cannot resolve",
+                     transform=blended(top), ha="center", va="center",
+                     fontsize=7.5, color="#718096")
+        top.set_title(label)
+        top.set_ylabel("Episodes to greedy convergence")
+        bot.set_ylabel("Mood advantage (% of baseline)")
+        bot.set_xlabel("Planning steps per real step")
+        bot.set_xticks(xs)
+        bot.set_xticklabels([str(n) for n in plans])
+        for ax in (top, bot):
+            ax.spines[["top", "right"]].set_visible(False)
+        top.set_ylim(bottom=0)
+        bot.set_xlim(-0.6, len(plans) - 0.45)
+        if ph == 1:
+            # the n=1 bootstrap CI runs to about -365%; showing it in full
+            # would crush the one point that matters (n=0) to a few pixels
+            bot.set_ylim(-150, 62)
+
+    axes[0, 0].legend(frameon=False, fontsize=8, loc="upper right")
+    axes[1, 0].annotate("\u2212114%, 95% CI to \u2212365% (clipped):\n"
+                        "baseline is ~1 episode, so the ratio\n"
+                        "is unstable \u2014 \u00a78 open q.2",
+                        xy=(1, -140), xytext=(1.75, -118), fontsize=7,
+                        color="#718096", va="center",
+                        arrowprops=dict(arrowstyle="-", lw=0.7, color="#a0aec0"))
+    param_note(axes[0, 1], loc="lower left", eta=eta, lam=lam,
+               lower_len=lower_len, seeds=n_seeds, boot=boot)
+    fig.suptitle("Baseline vs mood (bias real): absolute and relative advantage "
+                 "(top: mean \u00b1 SEM;  bottom: paired bootstrap 95% CI)", y=0.98)
     fig.tight_layout()
     return fig
 
@@ -364,12 +555,136 @@ def fig_mood_at_switch(eta=0.1, lam=0.7, lower_len=4, n_ep=400,
     return fig
 
 
+# --- the environment itself -------------------------------------------------
+
+TRAP_C, SHIELD_C, GOAL_C = "#dd6b20", "#2f855a", "#2d3748"
+
+
+def fig_maze(upper_len=2, lower_len=4, trap_cost=10.0):
+    """
+    Fig 0: the maze. Structure, rewards and exact Q* for both phases.
+
+    A schematic, not a data figure, so the blue/red agent colours do not apply
+    (there are no agent arms here). Everything drawn is read from
+    `make_maze_spec` and `Config.matched`, so it cannot drift from the
+    environment the agents actually run in.
+    """
+    spec = make_maze_spec(upper_len, lower_len)
+    cfgs = {ph: Config.matched(trap_cost=trap_cost, upper_len=upper_len,
+                               lower_len=lower_len, phase=ph) for ph in (1, 2)}
+    c = cfgs[1].step_cost
+
+    upper = ["start"] + [f"u_{i}" for i in range(1, upper_len)] + ["u_goal"]
+    lower = ["start", "shield"] + [f"d_{i}" for i in range(1, lower_len - 1)] + ["d_goal"]
+    pos = {s: (i, 1.0) for i, s in enumerate(upper)}
+    pos.update({s: (i - 1, 0.0) for i, s in enumerate(lower) if i > 0})
+
+    # which states are entered through a trap, and whether that trap is shielded
+    trap_at = {ns: prot for (ns, is_trap, prot) in spec["transitions"].values() if is_trap}
+
+    fig, ax = plt.subplots(figsize=(9.5, 4.4))
+
+    # corridor bands, so "which route" is readable at a glance
+    for states, y, label in [(upper, 1.0, "UPPER  %d steps, trap unshielded" % upper_len),
+                             (lower[1:], 0.0, "LOWER  %d steps, trap shielded in Phase 1" % lower_len)]:
+        x0 = min(pos[s][0] for s in states) - 0.45
+        x1 = max(pos[s][0] for s in states) + 0.45
+        ax.add_patch(plt.Rectangle((x0, y - 0.3), x1 - x0, 0.6, fc="#f7fafc",
+                                   ec="#e2e8f0", zorder=0))
+        ax.text(x1 + 0.12, y, label, va="center", ha="left", fontsize=8,
+                color="#4a5568")
+
+    def node(s):
+        x, y = pos[s]
+        if s in spec["terminals"]:
+            fc, ec, lw, txt = "#ffffff", GOAL_C, 2.0, "GOAL"
+        elif s == "shield":
+            fc, ec, lw, txt = "#f0fff4", SHIELD_C, 1.8, "shield"
+        elif s in trap_at:
+            fc, ec, lw, txt = "#fffaf0", TRAP_C, 1.8, "TRAP"
+        elif s == "start":
+            fc, ec, lw, txt = "#ffffff", "#000000", 2.0, "start"
+        else:
+            fc, ec, lw, txt = "#ffffff", "#a0aec0", 1.2, ""
+        ax.text(x, y, txt or s, ha="center", va="center", fontsize=8.5,
+                zorder=3, color=ec if txt else "#718096",
+                fontweight="bold" if txt in ("GOAL", "TRAP", "start") else "normal",
+                bbox=dict(boxstyle="round,pad=0.30", fc=fc, ec=ec, lw=lw))
+        if txt and s not in ("start", "shield"):
+            ax.text(x, y - 0.235, s, ha="center", va="top", fontsize=7,
+                    color="#718096", zorder=3)
+
+    for s in pos:
+        node(s)
+
+    def edge(s, a):
+        ns, is_trap, prot = spec["transitions"][(s, a)]
+        (x1, y1), (x2, y2) = pos[s], pos[ns]
+        dx, dy = x2 - x1, y2 - y1
+        n = (dx ** 2 + dy ** 2) ** 0.5
+        pad = 0.30
+        ax.annotate("", xy=(x2 - dx / n * pad, y2 - dy / n * pad),
+                    xytext=(x1 + dx / n * pad, y1 + dy / n * pad),
+                    arrowprops=dict(arrowstyle="-|>", lw=1.5,
+                                    color=TRAP_C if is_trap else "#4a5568"),
+                    zorder=2)
+        if is_trap and prot:
+            lab = f"$-{c:g}$  (P1)\n$-{c + trap_cost:g}$  (P2)"
+        elif is_trap:
+            lab = f"$-{c + trap_cost:g}$"
+        else:
+            lab = f"$-{c:g}$"
+        mx, my = (x1 + x2) / 2, (y1 + y2) / 2
+        # the vertical start->shield label goes LEFT of the arrow; to the
+        # right it collides with the lower trap's two-line (P1/P2) label.
+        off = (0.0, 0.17) if dy == 0 else (-0.12, 0.0)
+        ax.text(mx + off[0], my + off[1], lab, ha="center" if dy == 0 else "right",
+                va="bottom" if dy == 0 else "center", fontsize=7.5,
+                color=TRAP_C if is_trap else "#4a5568", zorder=3)
+
+    for (s, a) in spec["transitions"]:
+        edge(s, a)
+
+    # the only choice in the whole maze
+    ax.annotate("the only decision:\nright (upper) or down (lower)",
+                xy=pos["start"], xytext=(pos["start"][0] - 0.30, 1.62),
+                ha="center", fontsize=8, color="#000000",
+                arrowprops=dict(arrowstyle="-", lw=0.8, color="#000000"))
+
+    # exact Q* from optimal.py -- the ground truth, not re-derived here
+    rows = ["            Q*(start,right)   Q*(start,down)   optimal   margin"]
+    for ph in (1, 2):
+        Q, _ = optimal_q(cfgs[ph])
+        route, margin = optimal_route(cfgs[ph])
+        rows.append(f"  Phase {ph}     {Q[('start','right')]:>8.1f}      "
+                    f"{Q[('start','down')]:>10.1f}      {route:>7}    {margin:>5.1f}")
+    ax.text(-0.45, -0.72, "\n".join(rows), fontsize=8, family="monospace",
+            va="top", ha="left", color="#2d3748")
+    ax.text(-0.45, -1.16,
+            "Structural asymmetry (§5): the upper trap is 1 step from start, the lower trap 2, so the\n"
+            "Phase 2 cost change must propagate before it reaches Q(start,down). Phase 2 is harder for\n"
+            "reasons unrelated to mood.", fontsize=7.5, va="top", ha="left",
+            color="#718096", style="italic")
+
+    ax.set_xlim(-0.75, lower_len - 1 + 1.05)
+    ax.set_ylim(-1.45, 1.95)
+    ax.axis("off")
+    ax.set_title("The two-corridor shield/trap maze  (γ=1, no goal bonus, "
+                 "no way back)", pad=6)
+    param_note(ax, loc="upper right", step_cost=c, trap_cost=trap_cost,
+               upper_len=upper_len, lower_len=lower_len)
+    fig.tight_layout()
+    return fig
+
+
 if __name__ == "__main__":
     os.makedirs(OUT, exist_ok=True)
-    for name, fn in [("fig1_learning_curves", fig_learning_curves),
+    for name, fn in [("fig0_maze", fig_maze),
+                     ("fig1_learning_curves", fig_learning_curves),
                      ("fig2_mood_trace", fig_mood_trace),
                      ("fig3_lambda_sweep", fig_lambda_sweep),
                      ("fig4_planning_sweep", fig_planning_sweep),
+                     ("fig4b_planning_sweep_2arm", fig_planning_sweep_2arm),
                      ("fig5_mood_at_switch", fig_mood_at_switch)]:
         fig = fn()
         path = os.path.join(OUT, f"{name}.png")

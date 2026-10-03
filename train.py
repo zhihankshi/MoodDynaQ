@@ -55,6 +55,11 @@ def run_phase(env, agent, n_episodes, phase_label, log, episode_offset=0):
             "steps": result["steps"],
             "q_start_right": agent.q("start", "right"),
             "q_start_down": agent.q("start", "down"),
+            "q_shield_right": agent.q("shield", "right"),
+            "q_d1_right": agent.q("d_1", "right"),
+            "q_d2_right": agent.q("d_2", "right"),
+            # M at the end of the episode; NaN for the baseline (no mood term)
+            "mood_M": agent.mood.M if hasattr(agent, "mood") else float("nan"),
             "greedy_route": "lower" if agent.greedy_action("start") == "down" else "upper",
             "epsilon": agent.epsilon,
         })
