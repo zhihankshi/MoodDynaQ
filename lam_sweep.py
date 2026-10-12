@@ -1,3 +1,4 @@
+# Old design (CLAUDE.md §8): gamma pinned to 1.0 so §8 numbers reproduce.
 from env import Maze, Config, make_maze_spec
 from agent import DynaQ
 from mood import MoodyDynaQ, flip_threshold
@@ -12,13 +13,13 @@ print(f"{'lam':>6} {'peak|M|':>9} {'>thr?':>6} {'base P1':>9} {'mood P1':>9} {'b
 for lam in [0.5, 0.7, 0.8, 0.9, 0.95, 0.99]:
     bp1=mp1=bp2=mp2=0; peaks=[]; nb=nm=0
     for seed in range(8):
-        b = DynaQ(spec["valid_actions"], alpha=ETA, epsilon=0.1, planning_steps=0, seed=seed)
-        m = MoodyDynaQ(spec["valid_actions"], eta=ETA, lam=lam, epsilon=0.1,
+        b = DynaQ(spec["valid_actions"], gamma=1.0, alpha=ETA, epsilon=0.1, planning_steps=0, seed=seed)
+        m = MoodyDynaQ(spec["valid_actions"], gamma=1.0, eta=ETA, lam=lam, epsilon=0.1,
                        planning_steps=0, seed=seed)
         for a, tag in [(b,'b'), (m,'m')]:
             log=[]
-            run_phase(Maze(Config.matched(lower_len=4, phase=1)), a, N_EP, "phase1", log, 0)
-            run_phase(Maze(Config.matched(lower_len=4, phase=2)), a, N_EP, "phase2", log, N_EP)
+            run_phase(Maze(Config.matched(gamma=1.0, lower_len=4, phase=1)), a, N_EP, "phase1", log, 0)
+            run_phase(Maze(Config.matched(gamma=1.0, lower_len=4, phase=2)), a, N_EP, "phase2", log, N_EP)
             c1 = episodes_to_greedy_convergence(log,"phase1","lower")
             c2 = episodes_to_greedy_convergence(log,"phase2","upper")
             c1 = N_EP if c1 is None else c1; c2 = 2*N_EP if c2 is None else c2-N_EP

@@ -28,9 +28,22 @@ setup that later work can build on. It is not a paper. Keep it simple.
 learning agent acquires an optimal route, and how quickly it adapts when that
 route stops being optimal?
 
-**Primary measure:** episodes until the **greedy policy** (ε=0) selects the
-currently-optimal route, sustained for 20 consecutive episodes. See §9 for why
-greedy policy rather than a rolling window of executed routes.
+**Primary measure (from 2026-10-03, `study.py`):** Phase 2 **first passage** —
+episodes after the switch until the **greedy policy** (ε=0) at `start` first
+selects the upper route — compared across all arms.
+**Secondary:** `|Q − Q*|` for both actions at `start`, 5, 10, 25 and 50
+episodes after the switch (read at the end of Phase 2 episode k−1). Once the
+greedy route is upper, the abandoned `Q(start,down)` is updated only rarely
+(~5% of Phase 2 episodes at the 0.1 floor), so its later error measures
+exploration, not learning.
+**Flip-backs** (greedy upper → lower after first passage) are reported but are
+**not** part of the primary measure: with accurate tables at the switch the
+baseline arms produce none, so they are a mood-specific cost (the §8
+contamination dragging `Q(start,right)` below Q\*), not a learning-speed
+measure.
+See §9 for why greedy policy rather than a rolling window of executed routes.
+(Through 2026-09-27 the primary was sustained-20 convergence in each phase;
+§8 numbers use it.)
 
 **Hypotheses** (stated as three outcomes, because the project did not start
 with a committed directional prediction and we are not pretending otherwise):
@@ -99,16 +112,30 @@ convergence, never the destination.** Mood and baseline agents converge to the
 same Q-values. Any hypothesis phrased as "mood changes what is learned" is wrong
 on the math before anything runs.
 
+The derivation does not involve γ, so M\* = 0 holds under discounting too.
+
 During the transient, a sustained M acts like a constant per-step reward bonus
 
     b = (1 - eta) * M / eta
 
-which shifts the value gap between two routes by `b * dL`. Route preference
-flips when `|b| * dL > margin`, i.e. when
+Under discount γ a route of L steps collects `b * S(L)`, `S(L) = 1 + γ + … +
+γ^(L−1)`, so the value gap between two routes shifts by `b * D`,
+`D = S(L_long) − S(L_short)` (= dL at γ=1). Route preference flips when
+`|b| * D > margin`, i.e. when
 
-    |M| > margin * eta / ((1 - eta) * dL)        (mood.flip_threshold)
+    |M| > margin * eta / ((1 - eta) * D)        (mood.flip_threshold, pass D)
 
-At `eta=0.1, margin=5, dL=2` that threshold is **|M| > 0.278**.
+At `eta=0.1, γ=0.9, margin=4.5, D=1.539` that threshold is **|M| > 0.325**
+(it was 0.278 at γ=1, margin 5, dL=2).
+
+### 3.5 Discount
+
+γ = 0.9 (from 2026-10-03; earlier work used γ=1). It is a property of the
+task: `env.Config` carries it, `optimal.optimal_q` reads it from the config,
+and `DynaQ`'s default is the same 0.9. An agent built with a different γ from
+its config will not converge to that config's Q\* — `test_correctness.py`
+checks the two defaults agree. Every result before 2026-10-03 is at γ=1 and is
+not directly comparable with later ones.
 
 ---
 
@@ -140,7 +167,7 @@ Two corridors from a single decision point. No way back; corridors never merge.
   corridor the agent is in. It is **not** part of the state.
 - Illegal actions are masked everywhere: exploration, greedy argmax, and the
   bootstrap max.
-- γ = 1. Episodes end only at a goal.
+- γ = 0.9 (§3.5). Episodes end only at a goal.
 
 **Rewards** — all negative, no goal bonus. (A constant on every terminal
 transition shifts all Q equally and cannot change the argmax.)
@@ -151,35 +178,53 @@ transition shifts all Q equally and cannot change the argmax.)
 | trap cost `T` | extra, entering an unprotected trap |
 | protected trap `t` | extra, entering the lower trap: `0` in Phase 1, `T` in Phase 2 |
 
-**Margin arithmetic** (`dL = lower_len - upper_len`):
+**Margin arithmetic** under γ. `S(L) = 1 + γ + … + γ^(L−1)`,
+`D = S(lower_len) − S(upper_len)`. The upper trap is entered on step 1
+(undiscounted), the lower trap on step 2 (weighted γ):
 
-    Phase 1 margin (lower wins) = (T - t) - c*dL
-    Phase 2 margin (upper wins) = c*dL
-    Matched margins  <=>  c*dL = (T - t)/2
+    Q*(start,right) = -c*S(upper_len) - T
+    Q*(start,down)  = -c*S(lower_len) - γ*t
+    Phase 1 margin (t=0, lower wins) = T - c*D
+    Phase 2 margin (t=T, upper wins) = c*D - (1-γ)*T
+    Matched margins  <=>  c = T(2-γ)/(2D),  margin = γT/2
 
-`Config.matched(lower_len=, phase=)` solves for `c` so both margins equal 5.
+`Config.matched(lower_len=, phase=, gamma=)` solves for `c`. The matched margin
+is γT/2 = **4.5** for every corridor length (it was T/2 = 5 at γ=1). Keeping
+5 would need T = 100/9 = 11.11; not done, so T stays 10.
 
-**Default geometry:** `upper_len=2, lower_len=4, T=10`, so `c=2.5`.
+**Default geometry:** `upper_len=2, lower_len=4, T=10, γ=0.9`.
+`S(2)=1.9, S(4)=3.439, D=1.539, c = 11/3.078 = 3.5737`.
 
 | | Q\*(start, right) | Q\*(start, down) | optimal | margin |
 |---|---|---|---|---|
-| Phase 1 | −15 | −10 | lower | 5 |
-| Phase 2 | −15 | −20 | upper | 5 |
+| Phase 1 | −16.790 | −12.290 | lower | 4.5 |
+| Phase 2 | −16.790 | −21.290 | upper | 4.5 |
+
+(At γ=1 this table was −15 / −10 / −20 with c=2.5, margin 5.)
+
+**Option not adopted: both traps on step 2.** Moving the upper trap to
+`u_1 → u_goal` puts both traps at the same discount, removing the
+`(1−γ)T` term: margins `γT − cD` and `cD`, matched at `c = γT/(2D) = 2.924`,
+margin again 4.5. Q\*(start,right) = −14.556, Q\*(start,down) = −10.056 (P1) /
+−19.056 (P2), Q\*(u_1,right) = −12.924. Under γ=1 the same move did not help
+(below), so it is reported, not adopted.
 
 **Known structural asymmetry (not a bug, but it matters):** the upper trap is on
 the *first* step from `start`; the lower trap is on the *second*. So in Phase 1,
 `Q(start,right)` sees the −10 on its very first update — the agent can reject the
 upper route by one-step lookahead, no propagation needed. In Phase 2, the lower
 trap's new cost is two steps out and reaches `Q(start,down)` only by
-propagation. **Phase 2 is structurally harder than Phase 1, for reasons that
+propagation. Under γ it is also worth only γT = 9 there, against the full 10 on
+the upper route; the matched `c` absorbs this in the margins. **Phase 2 is structurally harder than Phase 1, for reasons that
 have nothing to do with mood.** Don't read a phase difference as a mood effect.
 Moving the upper trap one step later was tried (scratch prototype, 2026-09-23;
 `PREDICTIONS.md`) and **does not help**: Phase 1 first passage stays a coin
 flip on episode 0 (it is set by tried-vs-untried Q, not trap position), and
 Phase 1 flips roughly double (18 → 32 at n=0). Not adopted.
 
-Corridor length and step cost are interchangeable for the *decision* (only
-`c*dL` enters the margin) but not for *learning*. Counterintuitively, under
+At γ=1 corridor length and step cost were interchangeable for the *decision*
+(only `c*dL` entered the margin); under γ only `c*D` does. They were never
+interchangeable for *learning*. Counterintuitively, under
 matched margins longer corridors converge faster, because `c = 5/dL` shrinks and
 the trap dominates the return more cleanly. `planning_steps` is by far the
 stronger difficulty lever (§6).
@@ -247,7 +292,13 @@ With planning, value propagation is the bottleneck and ε barely matters. With
 states to learn, so ε roughly halves adaptation time across this range. The
 floor's value sets how much room there is for a mood effect: a higher ε makes
 baseline faster and may shrink the gap. Choose it deliberately, report it, and
-consider sweeping it alongside λ.
+consider sweeping it alongside λ. (These tables are γ=1, constant ε.)
+
+**From 2026-10-03, ε decays in Phase 1:** linear 1.0 → 0.1 over the first 200
+episodes (`train.linear_decay`), 0.1 for the remaining 300 Phase 1 episodes and
+all of Phase 2. Same schedule for every agent. The point is to leave Phase 1
+with an accurate `Q(start,right)` in every arm, removing the inherited-table
+half of the old Phase 2 gap (§8) by design rather than by analysis.
 
 ---
 
@@ -255,8 +306,11 @@ consider sweeping it alongside λ.
 
 | Decision | Why |
 |---|---|
-| Two phases only, 500 or fewer episodes each | A third switch (back to shield-works) is silent: the habitual upper route's return doesn't change, so there is no prediction error for mood to integrate. Dropped. |
-| ε held at a constant floor, never reset at the switch | Raising ε at the switch hands every agent an external cue that something changed — exactly what mood is supposed to supply internally. The floor is identical for both agents, so it is not a confound. **But its value matters** — see §6.4. |
+| Two phases only, 500 or fewer episodes each (now 500 / 100) | A third switch (back to shield-works) is silent: the habitual upper route's return doesn't change, so there is no prediction error for mood to integrate. Dropped. |
+| ε decays 1.0 → 0.1 over Phase 1 episodes 0–199, then holds the 0.1 floor; never reset or raised at the switch | Raising ε at the switch hands every agent an external cue that something changed — exactly what mood is supposed to supply internally. The decay ends 300 episodes before the switch, and the schedule is identical for every agent, so it is not a confound. **But the floor's value matters** — see §6.4. |
+| Phase 1 = 500 episodes, Phase 2 = 100 | Pilot on held-out seeds 100–129 (`study.py pilot`, `PREDICTIONS.md`): 500 is the first length at which every arm has `|Q(start,right) − Q*| < 0.1` on 30/30 seeds (worst: α=0.10, 0.076). Decay over 100 episodes was far too short (α=0.10: 7/30 at 500). Phase 2 first passage ≤ 19 in every arm; nothing censored at 100. |
+| Yoked-mood arm dropped from the γ=0.9 study (`study.py`) | The maze is deterministic, so every seed's M has nearly the same time course (seed i vs i+7 per-episode correlation 0.77 early Phase 1, 0.92 early Phase 2; `PREDICTIONS.md` 2026-09-27). M yoked to another seed is therefore almost the agent's own M, not an uncorrelated control. The old arm stays in `control_arms.py` for §8. |
+| Reversed order (P1 shield broken, P2 shield works): Phase 2 = 1000 episodes, ε not raised at the switch | Phase 2 is silent: the agent must *discover* the improved lower route, not unlearn a worse one, and only ε-driven lower runs teach it. At 100 episodes every seed is censored; switches land at episodes 99–550. Raising ε at the switch was rejected for the reason above (external change cue). 2026-10-04. **Being revisited 2026-10-05:** the agent never sees ε, and our mood has no path to action selection, so a reset cannot hide a mood-driven exploration effect. What it does is make the experimenter time the extra exploration to the change, which narrows the claim to "given exploration, does mood adapt faster". An exploratory reset arm (`study.py reversed reset`: Phase 2 reruns the Phase 1 ε schedule, 500 episodes) gives the same arm ranking and the same mood ≈ α=0.12 placement at ~1/9 the Phase 2 length (`PREDICTIONS.md` 2026-10-05). Not adopted yet. |
 | Mood persists across the switch, never reset | Detecting the change is the hypothesis. Resetting M erases the signal at the moment it should fire. |
 | No mood clip by default | The paper has none. The old DQN clip of ±1 discarded 87% of the magnitude of trap events — the most informative ones. |
 | Shield pickup reward = 0 | A pickup bonus can exceed the detour cost and keep the shield route optimal even when the shield does nothing. Then Phase 2 has nothing to reverse. |
@@ -266,6 +320,19 @@ consider sweeping it alongside λ.
 ---
 
 ## 8. Current results and open questions
+
+**Everything in this section up to "Open questions" was run at γ=1, constant
+ε=0.1, 400 episodes/phase, sustained-20 metric** — the design before
+2026-10-03. Those numbers do not carry over to the γ=0.9 / decaying-ε design
+(§3.5, §6.4, §7); `study.py` is the replacement. The old-design scripts
+(`plots.py`, `control_arms.py`, `transplant.py`, `q_snapshots.py`,
+`lam_sweep.py`, `mood_compare.py`, `mood_diag.py`, and via `plots.run_one`
+`first_passage.py`, `phase2_gap.py`, `convergence_table.py`) pin γ=1.0 and
+reproduce these numbers exactly (checked 2026-10-04: `control_arms.py` table
+identical). Design pilot on held-out
+seeds: at the switch every arm's `Q(start,right)` is within 0.08 of Q\*
+(mood overshoots *below* it, −16.804 vs −16.790), and **baseline arms made zero
+Phase 2 flip-backs on every seed**, so flip-backs are a mood-specific cost (§2).
 
 **At `eta=0.1, planning_steps=0`, 30 seeds** (`figures/fig3_lambda_sweep.png`):
 
@@ -602,7 +669,46 @@ choice made implicitly inside code, never written down or checked.**
 - Label every axis, with units. Remove top and right spines.
 - Check the output by viewing it. Look for overlapping labels.
 
-Core figures:
+**Current figure (γ=0.9 study): `fig_study`** — `python3 study.py fig`.
+Two panels, baseline α=0.10 (blue) vs mood η=0.10 (red), 30 paired seeds.
+Curves are the fraction of seeds whose greedy route at `start` is optimal,
+smoothed 3 episodes within each phase, ± SEM. A: Phase 1 episodes 0–40 (both
+then stay at 1.0 to the switch). B: Phase 2, −5 to +30 around the switch.
+The other α arms stay in the `study.py` table but are left out of the figure:
+learning-rate comparisons are not the current question (2026-10-04).
+
+**Reversed phase order: `fig_study_reversed`** — `python3 study.py fig reversed`.
+Phase 1 = shield broken (upper optimal), Phase 2 = shield works (lower
+optimal); everything else as the study, except Phase 2 = 1000 episodes
+(`N2_REVERSED`; see §7). Panel A shows 150 episodes smoothed 5; panel B
+shows 700 smoothed 25. Each seed switches once there, so unsmoothed the curve
+is 30 steps of 1/30 spread over ~450 episodes; 25 is to that axis what 5 is to
+panel A's. It blurs switch timing by about ±12 episodes, small next to the
+55-episode gap between arms.
+Results: `PREDICTIONS.md`, 2026-10-04 reversed.
+
+**Reversed order with an ε reset (exploratory): `fig_study_reversed_reset`** —
+`python3 study.py fig reversed reset`. As `fig_study_reversed`, except Phase 2
+reruns the Phase 1 ε schedule (1.0 → 0.1 over 200 episodes) and is 500
+episodes (`N2_RESET`). Every seed switches within ~70 episodes, so panel B is
+zoomed to −5…+80, smoothed 3. Results: `PREDICTIONS.md`, 2026-10-05.
+
+**Phase 1 Q-table audit: `fig_q_audit_p1`** — `python3 q_audit.py [seed]`.
+Original order, one seed (default 19), on which baseline α=0.10 and mood run the
+same route every episode until both have settled. Two tables in the style the
+mentor used: Ep, Route, Q(start,right), Q(start,down) (+ M for mood) at the end
+of each episode. Bold = greedy choice, red row = greedy wrong. Rows: every
+episode to 10, then every 5th, plus each agent's settle episode. The greedy
+route can flip between rows shown, so each table title gives the agent's count
+of wrong episodes.
+`python3 q_audit.py reversed [seed]` → `fig_q_audit_p1_reversed`: the same
+for the reversed order (default seed 12, closest to the mean settle episodes).
+
+**The figures below were removed from `figures/` on 2026-10-04.** They are
+γ=1 / constant-ε results (§8). Their scripts still regenerate them; describe
+them as old-design if you do.
+
+Old-design figures:
 - `fig0_maze` — the environment itself: structure, per-transition rewards,
   exact Q\* for both phases. A schematic, so the blue/red agent colours do not
   apply; everything drawn is read from `make_maze_spec`/`Config.matched`/
@@ -712,6 +818,8 @@ Two further conventions, learned the hard way:
 | `first_passage.py` | first-passage (sustain=1) vs sustained (20) greedy convergence and post-passage flip counts, baseline α=0.10/0.15 vs mood, planning 0/1/5 |
 | `phase2_gap.py` | why the Phase 2 sustained and first-passage measures disagree: generates/saves per-episode logs to `logs/phase2_gap/` (15 paired seeds) and re-reads them; end-of-Phase-1 Q, first passage, sustained, flips, flip-back attribution; `fig9` |
 | `transplant.py` | Phase 2 from a transplanted end-of-Phase-1 Q table (baseline's or mood's, M=0), both agents; plus the corrected yoked arm's end-P1 Q and P2 flips; logs to `logs/transplant/` |
+| `q_audit.py` | Phase 1 Q(start,·) tables per episode, baseline vs mood, one seed with identical routes (`fig_q_audit_p1`; `reversed` → `fig_q_audit_p1_reversed`) |
+| `study.py` | the γ=0.9 / decaying-ε design (2026-10-03): `pilot` sets episode counts on held-out seeds 100–129; default run is the 5-arm study (baseline α 0.10/0.12/0.15/0.19, mood) on seeds 0–29, Phase 2 first passage, flip-backs, `|Q−Q*|` at start at 5/10/25/50; `fig` draws `figures/fig_study.png`; `reversed` (and `fig reversed`) runs the same study with the phase order swapped; add `reset` to rerun the Phase 1 ε schedule in Phase 2 (exploratory) |
 | `convergence_table.py` | episodes-to-greedy-convergence as mean ± SD (and SEM, median, range, censored count), baseline vs mood, per phase |
 | `mood_predict.py`, `mood_diag.py`, `lam_sweep.py`, `mood_compare.py` | exploratory scripts behind §8–9 |
 | `PREDICTIONS.md` | predictions recorded before a run, with the outcome appended (rule 4) |

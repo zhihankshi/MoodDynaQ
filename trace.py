@@ -50,7 +50,7 @@ class TracingDynaQ(DynaQ):
 
 
 def trace_episodes(n_episodes=3, planning_steps=2, alpha=0.1, epsilon=0.0, seed=0):
-    agent = TracingDynaQ(VALID_ACTIONS, alpha=alpha, gamma=1.0,
+    agent = TracingDynaQ(VALID_ACTIONS, alpha=alpha,
                          epsilon=epsilon, planning_steps=planning_steps, seed=seed)
     env = Maze(Config.phase1())
 
@@ -105,7 +105,7 @@ def show_backward_propagation(planning_steps=0, alpha=0.1, n_episodes=12, seed=0
     Value propagates backward one link per pass. Watch the lower corridor fill
     in from the goal end. Compare planning_steps=0 against a larger value.
     """
-    agent = DynaQ(VALID_ACTIONS, alpha=alpha, gamma=1.0, epsilon=0.0,
+    agent = DynaQ(VALID_ACTIONS, alpha=alpha, epsilon=0.0,
                   planning_steps=planning_steps, seed=seed)
     agent.Q[("start", "down")] = 0.01  # force it down the lower corridor
     env = Maze(Config.phase1())
@@ -179,8 +179,8 @@ QUESTIONS TO WORK THROUGH
 6. Why does the bootstrap term use max_a' Q(s',a') rather than the Q-value of
    the action actually taken next? What would change if it used the latter?
 
-7. Q(start,right) should converge to -15: that is two -2.5 steps plus the -10
-   trap on the upper corridor. With epsilon=0 the agent never takes the upper
+7. Q(start,right) should converge to -16.79: a -3.57 step plus the -10 trap,
+   then a second -3.57 step discounted by gamma=0.9 (-c - T - 0.9c). With epsilon=0 the agent never takes the upper
    corridor at all. So how does Q(start,right) ever get updated?
    (Check the SUMMARY table -- is it still 0?)
 

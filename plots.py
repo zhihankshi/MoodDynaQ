@@ -19,6 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+# Old design (CLAUDE.md §8): gamma pinned to 1.0 so §8 numbers reproduce.
 from env import Maze, Config, make_maze_spec
 from agent import DynaQ
 from mood import MoodyDynaQ, flip_threshold
@@ -39,17 +40,17 @@ def run_one(kind, seed, eta, lam, planning_steps, lower_len, n_ep,
     """
     spec = make_maze_spec(2, lower_len)
     if kind == "baseline":
-        agent = DynaQ(spec["valid_actions"], alpha=eta, epsilon=epsilon,
+        agent = DynaQ(spec["valid_actions"], gamma=1.0, alpha=eta, epsilon=epsilon,
                       planning_steps=planning_steps, seed=seed)
     else:
-        agent = MoodyDynaQ(spec["valid_actions"], eta=eta, lam=lam,
+        agent = MoodyDynaQ(spec["valid_actions"], gamma=1.0, eta=eta, lam=lam,
                            epsilon=epsilon, planning_steps=planning_steps,
                            seed=seed, mood_updates_from=mood_updates_from,
                            mood_biases=mood_biases)
     log = []
-    run_phase(Maze(Config.matched(lower_len=lower_len, phase=1)),
+    run_phase(Maze(Config.matched(gamma=1.0, lower_len=lower_len, phase=1)),
               agent, n_ep, "phase1", log, 0)
-    run_phase(Maze(Config.matched(lower_len=lower_len, phase=2)),
+    run_phase(Maze(Config.matched(gamma=1.0, lower_len=lower_len, phase=2)),
               agent, n_ep, "phase2", log, n_ep)
     return log, agent
 
@@ -570,7 +571,7 @@ def fig_maze(upper_len=2, lower_len=4, trap_cost=10.0):
     environment the agents actually run in.
     """
     spec = make_maze_spec(upper_len, lower_len)
-    cfgs = {ph: Config.matched(trap_cost=trap_cost, upper_len=upper_len,
+    cfgs = {ph: Config.matched(gamma=1.0, trap_cost=trap_cost, upper_len=upper_len,
                                lower_len=lower_len, phase=ph) for ph in (1, 2)}
     c = cfgs[1].step_cost
 

@@ -24,38 +24,63 @@ def check(label, condition, detail=""):
 def test_hand_computed_values():
     """The analytic values must match the numbers derived by hand."""
     print("\ntest: analytic values match hand calculation")
-    # Default geometry: upper=2 steps, lower=4 steps, c=2.5, T=10.
+    # Default geometry: upper=2 steps (trap on step 1), lower=4 steps (trap on
+    # step 2), T=10, gamma=0.9, step cost c solved for matched margins.
     # Hand calculation:
-    #   upper = -2*2.5 - 10          = -15
-    #   lower (P1) = -4*2.5 - 0      = -10
-    #   lower (P2) = -4*2.5 - 10     = -20
+    #   S(2) = 1 + 0.9                    = 1.9
+    #   S(4) = 1 + 0.9 + 0.81 + 0.729     = 3.439
+    #   D    = S(4) - S(2) = 0.81 + 0.729 = 1.539
+    #   c    = T(2 - gamma) / (2D) = 11 / 3.078 = 5500/1539 = 3.573749
+    #   upper      = -c - T - 0.9c = -10 - 1.9c     = -10 - 6.790123 = -16.790123
+    #   lower (P1) = -3.439c                         = -12.290123
+    #   lower (P2) = -3.439c - 0.9*10                = -21.290123
+    #   margin P1  = -12.290123 - (-16.790123)       = 4.5
+    #   margin P2  = -16.790123 - (-21.290123)       = 4.5   (= gamma*T/2)
+    # Inside the corridors (V(goal) = 0):
+    #   Q*(u_1,right) = Q*(d_2,right) = -c          = -3.573749
+    #   Q*(d_1,right) = -c - 0.9c = -1.9c           = -6.790123
+    #   Q*(shield,right) = -c - t - 0.9*1.9c = -2.71c - t
+    #                    P1: -9.684860   P2: -19.684860
     # These are HARDCODED on purpose: this test is an independent check on
     # optimal.py, so it must not derive its expected values from the same code.
     # If you change the default geometry, redo the arithmetic by hand.
-    Q1, _ = optimal_q(Config.phase1())
-    Q2, _ = optimal_q(Config.phase2())
-    ok = True
-    ok &= check("phase1 Q*(start,right) = -15",
-                abs(Q1[("start", "right")] + 15.0) < TOL,
-                f"got {Q1[('start','right')]}")
-    ok &= check("phase1 Q*(start,down)  = -10",
-                abs(Q1[("start", "down")] + 10.0) < TOL,
-                f"got {Q1[('start','down')]}")
-    ok &= check("phase2 Q*(start,down)  = -20",
-                abs(Q2[("start", "down")] + 20.0) < TOL,
-                f"got {Q2[('start','down')]}")
-    ok &= check("phase1 optimal is lower, margin 5",
-                optimal_route(Config.phase1()) == ("lower", 5.0))
-    ok &= check("phase2 optimal is upper, margin 5",
-                optimal_route(Config.phase2()) == ("upper", 5.0))
+    c1, c2 = Config.phase1(), Config.phase2()
+    Q1, _ = optimal_q(c1)
+    Q2, _ = optimal_q(c2)
+    ok = check("step cost c = 3.573749", abs(c1.step_cost - 3.573749) < 1e-5,
+               f"got {c1.step_cost}")
+    expected = [
+        (Q1, "phase1", ("start", "right"), -16.790123),
+        (Q1, "phase1", ("start", "down"), -12.290123),
+        (Q2, "phase2", ("start", "right"), -16.790123),
+        (Q2, "phase2", ("start", "down"), -21.290123),
+        (Q1, "phase1", ("u_1", "right"), -3.573749),
+        (Q1, "phase1", ("shield", "right"), -9.684860),
+        (Q2, "phase2", ("shield", "right"), -19.684860),
+        (Q1, "phase1", ("d_1", "right"), -6.790123),
+        (Q2, "phase2", ("d_1", "right"), -6.790123),
+        (Q2, "phase2", ("d_2", "right"), -3.573749),
+    ]
+    for Q, ph, pair, want in expected:
+        ok &= check(f"{ph} Q*{pair} = {want}", abs(Q[pair] - want) < 1e-5,
+                    f"got {Q[pair]:.6f}")
+    r1, m1 = optimal_route(c1)
+    r2, m2 = optimal_route(c2)
+    ok &= check("phase1 optimal is lower, margin 4.5",
+                r1 == "lower" and abs(m1 - 4.5) < 1e-9, f"got {r1} {m1}")
+    ok &= check("phase2 optimal is upper, margin 4.5",
+                r2 == "upper" and abs(m2 - 4.5) < 1e-9, f"got {r2} {m2}")
+    ok &= check("agent default gamma = env gamma = 0.9",
+                DynaQ(VALID_ACTIONS).gamma == c1.gamma == 0.9)
 
-    # Margin formula holds for every geometry, not just the default.
+    # Margin formula holds for every geometry, not just the default:
+    # matched margin = gamma*T/2 = 4.5 regardless of lower_len.
     for lower in [3, 4, 6, 8]:
         for ph in [1, 2]:
             cfg = Config.matched(lower_len=lower, phase=ph)
             _, m = optimal_route(cfg)
-            ok &= check(f"matched geometry lower_len={lower} phase{ph}: margin 5",
-                        abs(m - 5.0) < TOL, f"got {m}")
+            ok &= check(f"matched geometry lower_len={lower} phase{ph}: margin 4.5",
+                        abs(m - 4.5) < TOL, f"got {m}")
     return ok
 
 

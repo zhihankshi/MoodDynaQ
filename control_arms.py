@@ -31,6 +31,7 @@ read back as an EFFECTIVE LEARNING RATE.
 
 import numpy as np
 
+# Old design (CLAUDE.md §8): gamma pinned to 1.0 so §8 numbers reproduce.
 from agent import DynaQ
 from env import Maze, Config, make_maze_spec
 from mood import MoodyDynaQ, MoodTracker, half_life_steps
@@ -42,7 +43,7 @@ SEEDS = range(30)
 ALPHAS = np.round(np.arange(0.10, 0.211, 0.005), 3)
 
 SPEC = make_maze_spec(2, LOWER_LEN)
-CFG = {p: Config.matched(lower_len=LOWER_LEN, phase=p) for p in (1, 2)}
+CFG = {p: Config.matched(gamma=1.0, lower_len=LOWER_LEN, phase=p) for p in (1, 2)}
 QSTAR = {p: optimal_q(CFG[p])[0] for p in (1, 2)}
 
 
@@ -116,7 +117,7 @@ class YokedMood(MoodyDynaQ):
 
 def build(kind, seed, alpha=ETA, lam=LAM, offset=0.0, trace=None):
     va = SPEC["valid_actions"]
-    common = dict(epsilon=EPSILON, planning_steps=PLANNING, seed=seed)
+    common = dict(gamma=1.0, epsilon=EPSILON, planning_steps=PLANNING, seed=seed)
     if kind == "baseline":
         return DynaQ(va, alpha=alpha, **common)
     if kind == "const":

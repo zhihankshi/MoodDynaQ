@@ -24,6 +24,7 @@ import os
 
 import numpy as np
 
+# Old design (CLAUDE.md §8): gamma pinned to 1.0 so §8 numbers reproduce.
 from agent import DynaQ
 from control_arms import YokedMood
 from env import Maze, Config, make_maze_spec
@@ -32,7 +33,7 @@ from train import run_phase, write_log
 
 ETA, LAM, PLAN, EPS, LOWER, N_EP, SEEDS = 0.1, 0.7, 0, 0.1, 4, 400, range(30)
 SPEC = make_maze_spec(2, LOWER)
-CFG = {p: Config.matched(lower_len=LOWER, phase=p) for p in (1, 2)}
+CFG = {p: Config.matched(gamma=1.0, lower_len=LOWER, phase=p) for p in (1, 2)}
 LOGDIR = os.path.join("logs", "transplant")
 ALPHAS = (0.10, 0.12, 0.15, 0.19)
 RECIPIENTS = [f"a{a:.2f}" for a in ALPHAS] + ["mood"]
@@ -40,7 +41,7 @@ DONORS = ("a0.10", "a0.15", "mood")
 
 
 def make(kind, seed, trace=None):
-    common = dict(epsilon=EPS, planning_steps=PLAN, seed=seed)
+    common = dict(gamma=1.0, epsilon=EPS, planning_steps=PLAN, seed=seed)
     if kind.startswith("a0"):
         return DynaQ(SPEC["valid_actions"], alpha=float(kind[1:]), **common)
     if kind == "yoked":

@@ -9,10 +9,11 @@ across the boundary: the Q table, the model, and epsilon are all carried over
 untouched. Nothing about the switch is signalled to the agent -- it must
 discover the change from experienced outcomes alone.
 
-Epsilon is held at a constant floor throughout both phases rather than being
-reset or raised at the switch. Raising it at the boundary would hand the agent
-an external cue that something changed, which is precisely the information an
-internal mood signal is hypothesised to supply.
+Epsilon may decay during Phase 1 (`linear_decay`, passed to run_phase as
+`epsilon_schedule`), but it must reach its floor well before the switch, and
+Phase 2 runs at that floor unchanged. Raising or resetting it at the boundary
+would hand the agent an external cue that something changed, which is
+precisely the information an internal mood signal is hypothesised to supply.
 """
 
 import csv
@@ -44,8 +45,22 @@ def run_episode(env, agent, max_steps=50):
     }
 
 
-def run_phase(env, agent, n_episodes, phase_label, log, episode_offset=0):
+def linear_decay(start, floor, n_decay):
+    """Epsilon for episode i: linear from `start` to `floor` over n_decay episodes."""
+    def schedule(i):
+        return floor if i >= n_decay else start + (floor - start) * i / n_decay
+    return schedule
+
+
+def run_phase(env, agent, n_episodes, phase_label, log, episode_offset=0,
+              epsilon_schedule=None):
+    """
+    `epsilon_schedule(i)`, if given, sets agent.epsilon before episode i of
+    this phase. Without it epsilon is left as it is (the Phase 2 rule).
+    """
     for i in range(n_episodes):
+        if epsilon_schedule is not None:
+            agent.epsilon = epsilon_schedule(i)
         result = run_episode(env, agent)
         log.append({
             "episode": episode_offset + i,
@@ -85,6 +100,28 @@ def episodes_to_greedy_convergence(log, phase, target_route, sustain=20):
         else:
             run = 0
     return None
+
+
+def flip_backs(log, phase, target_route, first):
+    """
+    Greedy flips AWAY from `target_route` after the first passage, where
+    `first` is the absolute episode of that passage (sustain=1). Counts
+    target -> other transitions only, not the re-flips onto the target.
+    """
+    g = [r["greedy_route"] for r in log
+         if r["phase"] == phase and r["episode"] >= first]
+    return sum(a == target_route and b != target_route for a, b in zip(g, g[1:]))
+
+
+def start_q_error(log, phase, Q_star, after):
+    """
+    |Q - Q*| for each action at `start`, read `after` episodes into `phase`
+    (i.e. at the end of the phase's episode index after-1). Returns
+    {"right": err, "down": err}.
+    """
+    r = [r for r in log if r["phase"] == phase][after - 1]
+    return {"right": abs(r["q_start_right"] - Q_star[("start", "right")]),
+            "down": abs(r["q_start_down"] - Q_star[("start", "down")])}
 
 
 def main(seed=0, episodes_per_phase=300, alpha=0.1, epsilon=0.1,

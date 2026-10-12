@@ -147,12 +147,17 @@ def per_step_bonus(eta, M):
         b = (1 - eta) * M / eta
 
     Because b accrues per step, it shifts long and short routes by different
-    amounts: the value gap between two routes moves by b * (L_long - L_short).
-    Route preference flips when |b| * dL exceeds the route margin.
+    amounts. Under discount gamma a route of L steps collects b*S(L), with
+    S(L) = 1 + gamma + ... + gamma^(L-1), so the value gap between two routes
+    moves by b * D, D = S(L_long) - S(L_short) (= L_long - L_short at gamma=1).
+    Route preference flips when |b| * D exceeds the route margin.
     """
     return (1 - eta) * M / eta
 
 
 def flip_threshold(eta, margin, dL):
-    """|M| needed for the per-step bonus to flip route preference."""
+    """
+    |M| needed for the per-step bonus to flip route preference. Pass the
+    DISCOUNTED length difference D (env.discounted_steps) as dL when gamma<1.
+    """
     return abs(margin) * eta / ((1 - eta) * dL)

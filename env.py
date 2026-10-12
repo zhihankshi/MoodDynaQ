@@ -21,17 +21,29 @@ shifts all Q-values equally and cannot change the argmax):
 Phase 1: t = 0  (shield works)  -> lower corridor optimal
 Phase 2: t = T  (shield inert)  -> upper corridor optimal
 
-MARGIN ARITHMETIC
-    Phase 1 margin = (T - t) - c * dL
-    Phase 2 margin = c * dL          where dL = lower_len - upper_len
-    Matched margins  <=>  c * dL = (T - t) / 2
+MARGIN ARITHMETIC (discount gamma, default 0.9)
+    S(L) = 1 + gamma + ... + gamma^(L-1)       discounted step count of a route
+    D    = S(lower_len) - S(upper_len)         discounted length difference
+    The upper trap is entered on step 1 (undiscounted), the lower trap on
+    step 2 (discounted by gamma).
 
-At gamma=1 there is no discounting, so corridor length and step cost are
-interchangeable levers on the same quantity c*dL. They are NOT interchangeable
-for the learning problem: a longer corridor means a longer backward-propagation
-chain, so value takes more passes to reach `start`. Use length, not step cost,
-to make the task harder to learn.
+    Q*(start,right) = -c*S(upper_len) - T
+    Q*(start,down)  = -c*S(lower_len) - gamma*t
+    Phase 1 margin (t=0, lower wins) = T - c*D
+    Phase 2 margin (t=T, upper wins) = c*D - (1 - gamma)*T
+    Matched margins  <=>  c = T*(2 - gamma) / (2*D),  margin = gamma*T/2
+
+At gamma=1 this reduces to the old c*dL = T/2 and margin T/2. With gamma<1
+corridor length and step cost are no longer interchangeable even for the
+decision: only the discounted difference D enters.
 """
+
+GAMMA = 0.9
+
+
+def discounted_steps(L, gamma=GAMMA):
+    """S(L) = sum_{k<L} gamma^k: what a per-step cost of 1 costs over L steps."""
+    return sum(gamma ** k for k in range(L))
 
 
 def make_maze_spec(upper_len=2, lower_len=4):
@@ -74,39 +86,52 @@ _TRANSITIONS = SPEC["transitions"]
 
 
 class Config:
-    def __init__(self, step_cost=2.5, trap_cost=10.0, trap_protected=0.0, spec=None):
+    """
+    Reward structure plus the discount. gamma lives here, not only on the
+    agent, because Q* and the matched step cost both depend on it; the agent
+    must be built with the same gamma (DynaQ's default matches GAMMA).
+    """
+
+    def __init__(self, step_cost, trap_cost=10.0, trap_protected=0.0, spec=None,
+                 gamma=GAMMA):
         self.step_cost = step_cost
         self.trap_cost = trap_cost
         self.trap_protected = trap_protected
         self.spec = spec or SPEC
+        self.gamma = gamma
 
     @classmethod
-    def matched(cls, trap_cost=10.0, upper_len=2, lower_len=4, phase=1):
+    def matched(cls, trap_cost=10.0, upper_len=2, lower_len=4, phase=1,
+                gamma=GAMMA):
         """
         Config with equal margins in both phases, for the given geometry.
-        Solves c = (T - t) / (2 * dL) so both margins equal (T-t)/2.
+        Solves c = T*(2 - gamma) / (2*D) so both margins equal gamma*T/2.
         """
         spec = make_maze_spec(upper_len, lower_len)
-        dL = lower_len - upper_len
-        if dL <= 0:
+        D = discounted_steps(lower_len, gamma) - discounted_steps(upper_len, gamma)
+        if D <= 0:
             raise ValueError("lower corridor must be longer than upper")
-        step_cost = trap_cost / (2 * dL)
+        step_cost = trap_cost * (2 - gamma) / (2 * D)
         t = 0.0 if phase == 1 else trap_cost
-        return cls(step_cost, trap_cost, t, spec)
+        return cls(step_cost, trap_cost, t, spec, gamma)
 
     @classmethod
-    def phase1(cls, step_cost=2.5, trap_cost=10.0, spec=None):
-        return cls(step_cost, trap_cost, 0.0, spec)
+    def phase1(cls, gamma=GAMMA):
+        """Default geometry, matched margins, shield works."""
+        return cls.matched(phase=1, gamma=gamma)
 
     @classmethod
-    def phase2(cls, step_cost=2.5, trap_cost=10.0, spec=None):
-        return cls(step_cost, trap_cost, trap_cost, spec)
+    def phase2(cls, gamma=GAMMA):
+        """Default geometry, matched margins, shield inert."""
+        return cls.matched(phase=2, gamma=gamma)
 
     def margins(self):
-        dL = self.spec["lower_len"] - self.spec["upper_len"]
-        protection = self.trap_cost - self.trap_protected
-        return {"phase1_style": protection - self.step_cost * dL,
-                "phase2_style": self.step_cost * dL}
+        """Margins of this reward structure with t=0 and with t=T."""
+        g = self.gamma
+        D = (discounted_steps(self.spec["lower_len"], g)
+             - discounted_steps(self.spec["upper_len"], g))
+        return {"phase1_style": self.trap_cost - self.step_cost * D,
+                "phase2_style": self.step_cost * D - (1 - g) * self.trap_cost}
 
 
 class Maze:

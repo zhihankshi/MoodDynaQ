@@ -425,3 +425,308 @@ does not reproduce it either.
 Premise check for the mechanism bullet: M trace of seed i vs seed i+7,
 per-episode correlation 0.77 (P1 ep 0–49), 0.07 (P1 ep 50–399, where M ≈ 0),
 0.92 (P2 ep 0–49); per-step, first 150 steps, 0.73.
+
+---
+
+# 2026-10-03 — Redesign: gamma=0.9, decaying epsilon, Phase 2 first-passage metrics
+
+Design changes (code done, before any run): gamma=0.9 in `optimal.py`/`env.Config`
+(agent default now 0.9 too); matched step cost c = T(2-γ)/(2D) = 3.5737,
+D = S(4) − S(2) = 1.539, margins 4.5 both phases. Q*(start,right) = −16.790,
+Q*(start,down) = −12.290 (P1) / −21.290 (P2). ε linear 1.0 → 0.1 over the first
+`N_decay` Phase 1 episodes, 0.1 for the rest of Phase 1 and all of Phase 2.
+Arms: baseline α ∈ {0.10, 0.12, 0.15, 0.19}; mood η=0.1, λ=0.7 (half-life 1.94
+real steps), mood real/real. planning_steps=0, lower_len=4, q_init=0.
+Episode-count pilot on held-out seeds 100–129 (the study uses 0–29).
+
+## Pilot predictions (design numbers)
+
+1. **Q(start,right) at the switch.** Error shrinks ~×(1−α) per upper visit
+   (with a lag through `u_1`), so <0.1 needs ~50 upper visits at α=0.1. Upper
+   is run at ~ε/2 per episode once greedy settles on lower. With N_decay=100,
+   ~30–40 upper visits come during the decay, the rest at 0.05/episode, so the
+   slowest seeds of α=0.10 need Phase 1 ≈ 300–400. N_decay=200 roughly halves
+   the tail. α≥0.15 and mood (eff. α≈0.15) get there ~1/3 sooner.
+2. Q(start,down) is on the greedy path and within 0.1 of Q* by episode ~100
+   in every arm. Mood's M at the switch is ~0 (|M| < 0.01), per §3.4.
+3. **Phase 2 length.** With Q(start,right) already at Q*, first passage is set
+   by Q(start,down) falling 4.5 through a two-link chain (shield → start):
+   ~17 episodes at α=0.10, ~9 at α=0.19 (hand estimate of the lagged filter,
+   ignoring ε). Last flip-back by episode ~40 in every arm; 100 episodes
+   censors nothing.
+
+## Study predictions (to check once the full run is approved)
+
+4. **Flip-backs ≈ 0 for every baseline arm.** At γ=1 the flips came from an
+   optimistic Q(start,right) left by Phase 1 (§8). The new Phase 1 length is
+   chosen to remove exactly that, so nothing is left to undo.
+5. **Mood flip-backs ≥ baseline, mean < 1.** Negative M after the switch drags
+   Q(start,right) below Q* on every upper run (the §8 contamination), which
+   can push it back under Q(start,down) while that is still near the crossing.
+6. **First passage: mood between α=0.12 and α=0.15**, as in the transplant
+   result (post-switch effect ≈ α 0.135). The inherited-table half of the old
+   gap is gone by design, so the mood vs α=0.10 gap should be ~4 episodes,
+   not 14.
+7. **Secondary |Q−Q*| at start.** Q(start,right): ~0 for baselines at all four
+   checkpoints; mood > 0 (contamination, a few tenths) at 5–10, decaying.
+   Q(start,down): large at 5 (~3–4), falling while it is greedy, then nearly
+   frozen once the greedy route is upper — the 25 and 50 values (~0.5–1.5)
+   mostly reflect ε visits, not learning speed.
+
+## Pilot outcome (`python3 study.py pilot`, seeds 100–129)
+
+Seeds (of 30) with |Q(start,right) − Q*| < 0.1 at Phase 1 episode N (worst error):
+
+| decay | arm | N=200 | 300 | 400 | 500 | 600 |
+|---|---|---|---|---|---|---|
+| 100 | α=0.10 | 0 (2.02) | 0 (1.40) | 2 (0.80) | 7 (0.50) | 11 (0.35) |
+| 100 | mood | 1 (0.49) | 2 (0.44) | 5 (0.43) | 11 (0.31) | 18 (0.26) |
+| 200 | α=0.10 | 16 (0.29) | 22 (0.22) | 27 (0.12) | 30 (0.08) | 30 (0.06) |
+| 200 | α=0.12 | 29 (0.12) | 30 (0.08) | 30 (0.04) | 30 (0.02) | 30 (0.02) |
+| 200 | α=0.15 | 30 (0.04) | 30 | 30 | 30 | 30 |
+| 200 | α=0.19 | 30 (0.01) | 30 | 30 | 30 | 30 |
+| 200 | mood | 21 (0.15) | 28 (0.13) | 30 (0.09) | 30 (0.05) | 30 (0.03) |
+
+Chosen: decay over 200, Phase 1 = 500 (first N where all arms are 30/30).
+At the switch (N=500), mean Q(start,right) vs Q* −16.790: α=0.10 −16.762 (max
+err 0.076), 0.12 −16.783, 0.15 −16.789, 0.19 −16.790, mood −16.804 (max err
+0.049, overshoots *below* Q*). Q(start,down) = −12.290 in every arm (max err
+0.002). Mood |M| ≤ 0.0003.
+Phase 2 (run 300 to check censoring): max first passage 19 / 15 / 12 / 10 / 14
+(α 0.10 / 0.12 / 0.15 / 0.19 / mood); nothing censored at 100. Baseline arms:
+**zero flip-backs on every seed**; mood: some, the last at Phase 2 episode 15.
+
+Prediction 1 right on the order of magnitude but N_decay=100 was much worse
+than predicted (α=0.10 still 7/30 at N=500): the floor-rate tail is slower than
+the visit count suggested. Mood was predicted to be among the fast arms; it
+is closer to α=0.12, and its error is a negative overshoot (contamination),
+not lag. Prediction 2 right. Prediction 3 right on length (first passage ≤ 19);
+"last flip-back by ~40" moot for baselines — they have none.
+
+## 2026-10-04 — Study predictions, restated before the seeds 0–29 run
+
+Written after the held-out pilot (seeds 100–129), before running `study.py` on
+seeds 0–29. Design as above: Phase 1 = 500 (ε 1.0 → 0.1 over 200), Phase 2 = 100.
+Primary = Phase 2 first greedy switch to upper, all arms; flip-backs are a
+mood-specific cost, not primary (CLAUDE.md §2). Changes from predictions 4–6:
+prediction 5 sharpened to "only mood".
+
+A. **Mood's Phase 2 first switch falls between the α=0.12 and α=0.15 arms.**
+B. **α=0.19 is fastest** of all five arms; order α=0.19 < 0.15 < mood < 0.12 < 0.10.
+C. **Only mood has flip-backs.** All four baseline arms: 0 on every seed.
+   Mood: mean > 0 and < 1.
+D. Secondary (unchanged from 7): Q(start,right) error ~0 for baselines at
+   every checkpoint, a few tenths for mood at k=5–10 and decaying;
+   Q(start,down) error large at k=5, small and roughly frozen by k=25–50.
+
+### Outcome (`python3 study.py`, seeds 0–29, 2026-10-04)
+
+| arm | P2 first switch | flip-backs | Q(start,right) err k=5/10/25/50 | Q(start,down) err k=5/10/25/50 |
+|---|---|---|---|---|
+| α=0.10 | 17.00 ± 0.20 | 0 | 0.02 / 0.02 / 0.01 / 0.00 | 8.40 / 6.86 / 4.30 / 4.03 |
+| α=0.12 | 13.87 ± 0.20 | 0 | 0.01 / 0.01 / 0.00 / 0.00 | 8.17 / 6.20 / 4.26 / 3.93 |
+| α=0.15 | 10.73 ± 0.17 | 0 | 0.00 at all k | 7.78 / 5.23 / 4.14 / 3.78 |
+| α=0.19 | 8.67 ± 0.17 | 0 | 0.00 at all k | 7.18 / 4.30 / 3.89 / 3.43 |
+| mood | 12.97 ± 0.24 | 0.03 ± 0.03 | 0.06 / 0.07 / 0.05 / 0.00 | 7.92 / 5.79 / 3.96 / 3.60 |
+
+Paired first switch, arm − mood: α=0.10 +4.03 ± 0.09, α=0.12 +0.90 ± 0.06,
+α=0.15 −2.23 ± 0.10, α=0.19 −4.30 ± 0.13.
+
+A. **Right.** Mood sits between α=0.12 and 0.15, nearer 0.12 (≈ α 0.13 by
+   linear interpolation), as in the γ=1 transplant result (≈ 0.135).
+B. **Right.** Order α=0.19 < 0.15 < mood < 0.12 < 0.10, all paired gaps ≥ 9 SEM.
+C. **Right, barely.** Baselines 0 on every seed; mood has one flip-back on one
+   seed out of 30.
+D. **Half wrong.** Mood's Q(start,right) error is a few *hundredths*, not
+   tenths. Q(start,down) error does not get small: it stays ~3.4–4.3 at
+   k=25–50 in every arm. When the greedy route flips to upper,
+   Q(start,down) has just fallen past Q(start,right) = −16.79, so it is still
+   ~4.5 from its Q* (−21.29), and after that it moves only on ε visits. The
+   k=25/50 values are that leftover gap, slowly eroded by exploration — the
+   caveat in CLAUDE.md §2, but much larger than predicted (prediction 7 said
+   0.5–1.5).
+
+### Not predicted: mood slows Phase 1 acquisition (seen in `fig_study`, 2026-10-04)
+
+Same run, seeds 0–29. Phase 1 episodes until the greedy route is lower for good
+(last wrong greedy episode + 1): every baseline arm 1.40 ± 0.37, identical
+across α (1/30 seeds past episode 5); mood 5.80 ± 1.48 (11/30 past episode 5,
+last at episode 27). Mood's M bottoms out at −0.56 on average in episodes 0–29,
+past the 0.325 flip threshold (§3.4): the per-step bonus penalizes the longer
+lower route, as H2 predicts. The cost is gone by episode 30, long before the
+switch at 500. No prediction covered Phase 1, because §8 had called Phase 1
+first passage degenerate. Under decaying ε it no longer is for mood.
+
+Mechanism check (scratch diagnostic, same settings, seeds 0–29, Phase 1
+episodes 0–39). Every wrong-way greedy flip in both arms is a `Q(start,down)`
+update pushing it below `Q(start,right)` (baseline 10/10, mood 26/26). That's
+the optimistic-`q_init` alternation of §12/fig8, not something new. Mood just
+makes more of them (10 vs 1 after episode 5). At the late mood flips the TD
+part is always negative (10/10). The mood part `(1−η)M` is −0.22 against
+`ηδ` −0.30. It is the larger of the two in only 2/10, so mood adds to the
+descent rather than reversing it. Correction, same day: an earlier reading here put
+it down to `Q(start,down)` getting more updates. That is weak: ε is still
+0.83–1.0 in episodes 0–39, so executed routes are 55% lower / 45% upper in
+both arms. The flips follow the trap instead. Of mood's 24 wrong-way flips in
+episodes 3–39, 17 come on a lower episode that directly follows an upper
+episode (291 such episodes) and 7 after a lower episode (321 such). M entering
+the episode is −0.214 after an upper episode and −0.134 after a lower one.
+Baseline: 1 vs 2, no dependence. Reading: M persists across episodes, so the
+negative surprise of the upper trap is still in M when the next episode's first
+update lands on `Q(start,down)`. Mood moves the trap's punishment onto the
+action taken next. In Phase 1 that drags down the correct route. Gone by
+~episode 30 as δ shrinks and M → 0 (§3.4).
+
+## 2026-10-04 — Reversed phase order: predictions, written before running
+
+Grad-student design: Phase 1 = shield does NOT work (`Config.matched(phase=2)`,
+upper optimal), Phase 2 = shield works (`phase=1`, lower optimal). Everything
+else identical to the study: γ=0.9, ε 1.0 → 0.1 over P1 episodes 0–199 then
+0.1, P1=500 / P2=100, planning_steps=0, lower_len=4, q_init=0, mood η=0.1
+λ=0.7 (half-life 1.94 real steps) real/real, baseline α 0.10/0.12/0.15/0.19,
+seeds 0–29 paired. Question: is mood again slower in Phase 1 and faster in Phase 2?
+
+R1. **Phase 1: mood's cost shrinks or vanishes.** The carry-over found above
+    (a trap surprise left in M lands on the next episode's first update) now
+    cuts both ways: both routes have a trap, so lower episodes leave M just
+    as negative as upper ones. Predict mood ≤ 2 episodes slower than baseline
+    on Phase 1 "last wrong greedy + 1" (original design: 5.8 vs 1.4).
+R2. **Phase 2 is silent and slow; many seeds censored at 100.** The greedy
+    upper route's return does not change (§7), so learning only happens on
+    ε-driven lower runs (~5% of episodes). `Q(start,down)` must rise by
+    ~4.5 through two levels of propagation at α=0.1. Predict median baseline
+    α=0.10 first passage > 100 (censored).
+R3. **Mood is not faster in Phase 2, and may be slower.** Surprises are now
+    positive (lower route better than expected), so M goes positive after a
+    lower run, and the carry-over puts it on the next episode's first update,
+    usually `Q(start,right)` (greedy upper). That props up the route to be
+    abandoned. Against this, mood's higher effective learning rate speeds up the
+    lower-route updates. Lean: mood no faster than baseline α=0.10.
+
+### Outcome (`python3 study.py reversed`, seeds 0–29, 2026-10-04)
+
+| arm | P1 settled on upper | P2 first lower @100 | P2 first lower, P2 run 3000 (median, range) |
+|---|---|---|---|
+| α=0.10 | 50.53 ± 1.66 | censored 30/30 | 349.6 ± 15.9 (331, 189–550) |
+| α=0.12 | 39.03 ± 2.43 | censored 30/30 | 289.7 ± 15.4 (268, 132–499) |
+| α=0.15 | 32.20 ± 2.05 | censored 30/30 | 221.6 ± 12.7 (219, 103–458) |
+| α=0.19 | 26.60 ± 1.52 | censored 29/30 | 180.8 ± 12.9 (170, 99–442) |
+| mood | 34.30 ± 2.13 | censored 30/30 | 295.1 ± 15.9 (286, 132–499) |
+
+Paired α=0.10 − mood: Phase 1 +16.2 ± 1.9 (mood faster on 28/30 seeds),
+Phase 2 (3000-episode run) +54.5 ± 5.8 (30/30). No flip-backs in any arm. At the
+switch, |Q(start,down) − Q*| (the abandoned route) 0.20 for α=0.10 and 0.12 for mood.
+The 3000-episode Phase 2 is a supplementary run; nothing else changed.
+
+R1. **Right in direction, wrong in size.** Mood's Phase 1 cost is gone. Mood
+    is clearly *faster* (34 vs 51), between α=0.12 and 0.15. Phase 1 is
+    much harder for every arm than in the original order (51 vs 1.4 at
+    α=0.10): the optimal upper route's trap is on step 1, so `Q(start,right)`
+    takes the −10 at once, and the lower trap must propagate before the
+    lower route looks worse.
+R2. **Right.** Every arm censored at 100. Real Phase 2 durations 99–550 episodes,
+    ~20× the original order. The silent switch (§7) is learned only from
+    ε-driven lower runs.
+R3. **Wrong.** Mood is faster in Phase 2 too, on every seed, about like
+    α=0.12. Any carry-over of positive M onto `Q(start,right)` is too small to
+    show. In this order mood behaves like a higher learning rate in both phases
+    (≈ α 0.13–0.14 in Phase 1, ≈ α 0.12 in Phase 2). The original order's Phase 1
+    cost does not reappear. That fits the carry-over reading above: it hurts
+    only when one route alone carries the trap surprise and the other is the
+    correct one.
+
+## 2026-10-04 — Reversed order, Phase 2 = 1000 episodes (design change)
+
+Reversed-order Phase 2 lengthened from 100 to 1000 episodes; the original order
+keeps 100. Raising ε at the switch was rejected (§7: an external change cue).
+Prediction: the first 1000 Phase 2 episodes are the same as in the 3000-episode
+supplementary run (same seeds, same RNG stream), so first passage should
+reproduce it exactly: α=0.10 349.6, mood 295.1, nothing censored, no flip-backs.
+Outcome: **right, exactly.** `python3 study.py reversed` now gives α=0.10
+349.63 ± 15.94, mood 295.13 ± 15.88, 0/30 censored in every arm, no flip-backs.
+Original order unchanged (17.00 / 12.97).
+
+### Phase 1 Q-table audit, seed 19 (`q_audit.py`, original order, 2026-10-04)
+
+Same routes in both agents through episode 20. Baseline greedy is correct from
+episode 0; mood's is wrong at episode 2 and from 9 to 19 (settles at 20). Each episode's change in
+the updated `Q(start,·)` splits into a TD part `ηδ` and a mood part `(1−η)M`.
+The TD parts are almost identical in the two agents (lower runs −0.27 to −0.36,
+upper runs −0.89 to −1.36). The mood part is −0.10 to −0.47 per update. It is
+added whichever route was run and is largest on the first update after an
+upper (trap) episode (−0.25 to −0.47, vs −0.14 to −0.23 after a lower one).
+Episodes 0–20, summed: mood part −3.75 on `Q(start,down)` (14 lower runs)
+vs −1.07 on `Q(start,right)` (7 upper runs). Per visit, baseline's upper
+route costs ~3.4× its lower route (−1.15 vs −0.34); with mood it is ~2.3×
+(−1.4 vs −0.6). Mood narrows the per-visit difference between the trap route
+and the cheap one, so a streak of lower runs (episodes 6–9, `Q(start,right)`
+frozen at −4.464) pulls `Q(start,down)` below it. This seed's flip at 9 comes
+in a streak of lower runs, not right after an upper episode. The carry-over
+reading above is one part of a broader effect: the mood term does not
+depend on which route earned it.
+
+### Phase 1 Q-table audit, reversed order, seed 12 (`q_audit.py reversed`)
+
+Seeds with identical routes until both settle: 4, 12, 16, 19. Seed 12 (baseline
+settles at 47, mood at 24) is closest to the means (50.5 / 34.3). Both agents
+first prefer the wrong (lower) route: the upper trap hits `Q(start,right)` on
+step 1, while the lower trap is on step 2 and reaches `Q(start,down)` only via
+`Q(shield,right)`. Episodes 0–47, summed: the mood part is −4.18 on
+`Q(start,down)` and −3.71 on `Q(start,right)`, nearly even (original order,
+seed 19: −3.75 vs −1.07). Both routes earned it. Mood also pushes the
+lower-corridor entries, so the trap's cost travels back faster:
+`Q(shield,right)` at episode 18 is −14.98 (mood) vs −10.55 (baseline),
+Q\* −19.685. The TD part of mood's lower-run updates is therefore larger: −15.40
+vs baseline's −14.58 summed. Mood overshoots `Q(shield,right)` (−20.30 at
+episode 32 vs Q\* −19.685); that is the route being abandoned, so it costs nothing here.
+After first passage baseline flips back three times (43, 44, 46: values within
+0.4); mood's values are 2–3 apart and do not flip back.
+
+## 2026-10-05 — Reversed order with an ε reset at the switch: predictions, written before running
+
+Exploratory arm, not a design change: the 2026-10-04 reversed study (no reset,
+P2 = 1000) stays the reference. Phase 2 reuses the Phase 1 schedule: ε 1.0 →
+0.1 linear over Phase 2 episodes 0–199, then 0.1. Phase 2 = 500 episodes.
+Same for every arm. Everything else as `study.py reversed`. Why test it: our
+mood never touches action selection, so a reset cannot mask a mood-driven
+exploration effect; it changes the regime (visit-limited → update-limited)
+and narrows the claim to "given exploration, does mood adapt faster".
+`python3 study.py reversed reset`.
+
+P1. Phase 1 identical to the reversed study (same seeds, RNG and schedule up
+    to the switch): α=0.10 50.53, mood 34.30.
+P2. Phase 2 first passage drops from hundreds of episodes to tens: α=0.10
+    ~30–50, mood ~20–35, nothing censored at 500. With ε near 1 about half the
+    early episodes go lower, so visits stop being the bottleneck; the trap
+    removal must propagate shield → start, so it is not immediate.
+P3. Mood still faster on most seeds (≥ 24/30), ordered like a learning rate
+    (between α=0.12 and 0.15). The absolute gap shrinks well below the 54.5
+    of the no-reset run; the relative gap is similar or larger.
+P4. Flip-backs near zero in every arm: the abandoned upper route keeps
+    `Q(start,right)` at Q*, and lower runs only raise `Q(start,down)`.
+
+### Outcome (`python3 study.py reversed reset`, seeds 0–29, 2026-10-05)
+
+| arm | P1 settled on upper | P2 first lower (reset, P2=500) | no reset (2026-10-04) |
+|---|---|---|---|
+| α=0.10 | 50.53 ± 1.66 | 37.77 ± 1.53 (median 36.5) | 349.6 ± 15.9 |
+| α=0.12 | 39.03 ± 2.43 | 30.40 ± 1.31 (29.5) | 289.7 ± 15.4 |
+| α=0.15 | 32.20 ± 2.05 | 23.30 ± 1.04 (23.0) | 221.6 ± 12.7 |
+| α=0.19 | 26.60 ± 1.52 | 18.17 ± 0.97 (17.0) | 180.8 ± 12.9 |
+| mood | 34.30 ± 2.13 | 30.97 ± 1.35 (30.0) | 295.1 ± 15.9 |
+
+0/30 censored and 0 flip-backs in every arm. Paired α=0.10 − mood: +6.80 ±
+0.83 (mood faster on 29/30 seeds); α=0.12 − mood: −0.57 ± 0.38. Mood's
+abandoned `Q(start,right)` drifts off Q* (0.33 / 0.41 at k=10 / 25, back to
+0.15 at k=50); every baseline holds it at 0.00. That is the §8 contamination:
+the upper route is visited often under high ε, and each visit gets `(1−η)M`.
+
+P1 **right**, identical. P2 **right** (37.8 / 31.0). P3 **right in direction,
+slightly off in placement**: 29/30 seeds, but mood sits at α≈0.12, not between
+0.12 and 0.15, which is the same place it sits without the reset. Absolute gap
+54.5 → 6.8; relative gap 15.6% → 18.0%. P4 **right**.
+
+Reading: the reset shortens Phase 2 ~9× for every arm and leaves the ranking
+of the arms, and mood's equivalent learning rate, unchanged. In this agent the
+reset changes how long Phase 2 takes, not what the comparison says. Expected,
+since mood has no path to action selection.

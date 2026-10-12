@@ -24,7 +24,7 @@ import random
 
 
 class DynaQ:
-    def __init__(self, valid_actions, alpha=0.1, gamma=1.0, epsilon=0.1,
+    def __init__(self, valid_actions, alpha=0.1, gamma=0.9, epsilon=0.1,
                  planning_steps=5, q_init=0.0, seed=None):
         self.valid_actions = valid_actions
         self.alpha = alpha

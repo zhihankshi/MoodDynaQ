@@ -35,6 +35,7 @@ import numpy as np
 from matplotlib.colors import Normalize
 from matplotlib.patches import Rectangle
 
+# Old design (CLAUDE.md §8): gamma pinned to 1.0 so §8 numbers reproduce.
 from env import Maze, Config, make_maze_spec
 from agent import DynaQ
 from mood import MoodyDynaQ, half_life_steps
@@ -53,9 +54,9 @@ START_W, START_H = 0.80, 0.58   # start holds two values, so it is bigger
 
 def make_agent(kind, seed, eta, lam, planning_steps, epsilon, spec):
     if kind == "baseline":
-        return DynaQ(spec["valid_actions"], alpha=eta, epsilon=epsilon,
+        return DynaQ(spec["valid_actions"], gamma=1.0, alpha=eta, epsilon=epsilon,
                      planning_steps=planning_steps, seed=seed)
-    return MoodyDynaQ(spec["valid_actions"], eta=eta, lam=lam, epsilon=epsilon,
+    return MoodyDynaQ(spec["valid_actions"], gamma=1.0, eta=eta, lam=lam, epsilon=epsilon,
                       planning_steps=planning_steps, seed=seed)
 
 
@@ -76,7 +77,7 @@ def run_with_snapshots(kind, seed, snap_episodes, eta, lam, planning_steps,
     log, snaps, offset = [], {}, 0
 
     for phase in (1, 2):
-        cfg = Config.matched(lower_len=lower_len, phase=phase)
+        cfg = Config.matched(gamma=1.0, lower_len=lower_len, phase=phase)
         env = Maze(cfg)
         for i in range(1, n_ep + 1):
             offset = run_phase(env, agent, 1, f"phase{phase}", log, offset)
@@ -209,7 +210,7 @@ def fig_q_snapshots(eta=0.1, lam=0.7, planning_steps=0, lower_len=4,
         runs[k], logs[k] = run_with_snapshots(k, seed, snap_episodes, eta, lam,
                                               planning_steps, lower_len, n_ep,
                                               epsilon)
-    qstar = {ph: optimal_q(Config.matched(lower_len=lower_len, phase=ph))[0]
+    qstar = {ph: optimal_q(Config.matched(gamma=1.0, lower_len=lower_len, phase=ph))[0]
              for ph in (1, 2)}
 
     # one colour scale for every panel, anchored on Q*, or the panels cannot
@@ -225,7 +226,7 @@ def fig_q_snapshots(eta=0.1, lam=0.7, planning_steps=0, lower_len=4,
 
     for r, (kind, ph) in enumerate(rows):
         target = "lower" if ph == 1 else "upper"
-        cfg = Config.matched(lower_len=lower_len, phase=ph)
+        cfg = Config.matched(gamma=1.0, lower_len=lower_len, phase=ph)
         panels = [(runs[kind][(ph, ep)]["Q"], runs[kind][(ph, ep)]["seen"])
                   for ep in snap_episodes]
         panels.append((qstar[ph], set(qstar[ph])))
@@ -387,7 +388,7 @@ def fig_q_first_flip(eta=0.1, lam=0.7, planning_steps=0, lower_len=4,
     run-up to one flip, episode by episode.
     """
     spec = make_maze_spec(2, lower_len)
-    cfg = Config.matched(lower_len=lower_len, phase=1)
+    cfg = Config.matched(gamma=1.0, lower_len=lower_len, phase=1)
     data = {}
     for kind in ("baseline", "mood"):
         snaps, log = run_with_snapshots(kind, seed, range(1, n_ep + 1), eta,
@@ -454,7 +455,7 @@ def fig_q_flips(eta=0.1, lam=0.7, planning_steps=0, lower_len=4, n_ep=150,
     because that run is what moved the value that flipped.
     """
     spec = make_maze_spec(2, lower_len)
-    cfg = Config.matched(lower_len=lower_len, phase=1)
+    cfg = Config.matched(gamma=1.0, lower_len=lower_len, phase=1)
     qstar = optimal_q(cfg)[0]
     data = {}
     for kind in ("baseline", "mood"):

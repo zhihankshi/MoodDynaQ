@@ -1,14 +1,15 @@
 """What does M actually do over training?"""
+# Old design (CLAUDE.md §8): gamma pinned to 1.0 so §8 numbers reproduce.
 from env import Maze, Config, make_maze_spec
 from mood import MoodyDynaQ, per_step_bonus, flip_threshold
 from train import run_phase
 
 spec = make_maze_spec(2, 4)
 for eta in [0.1, 0.5]:
-    m = MoodyDynaQ(spec["valid_actions"], eta=eta, lam=0.95, epsilon=0.1,
+    m = MoodyDynaQ(spec["valid_actions"], gamma=1.0, eta=eta, lam=0.95, epsilon=0.1,
                    planning_steps=0, seed=0)
     log = []
-    run_phase(Maze(Config.matched(lower_len=4, phase=1)), m, 400, "phase1", log, 0)
+    run_phase(Maze(Config.matched(gamma=1.0, lower_len=4, phase=1)), m, 400, "phase1", log, 0)
     tr = m.mood_trace
     thr = flip_threshold(eta, 5.0, 2)
     print(f"\neta={eta}: flip threshold |M| > {thr:.3f}")
@@ -22,7 +23,7 @@ for eta in [0.1, 0.5]:
 
 # sanity: does mood actually change anything at all?
 print("\n\n=== sanity: mood term is actually being applied ===")
-m = MoodyDynaQ(spec["valid_actions"], eta=0.1, lam=0.95, epsilon=0.0,
+m = MoodyDynaQ(spec["valid_actions"], gamma=1.0, eta=0.1, lam=0.95, epsilon=0.0,
                planning_steps=0, seed=0)
 m.mood.M = -1.0   # force a large sustained mood
 q_before = m.q("start","down")
